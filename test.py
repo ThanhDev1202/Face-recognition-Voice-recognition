@@ -10,8 +10,16 @@ from PIL import Image
 ctk.set_appearance_mode("Light")
 ctk.set_default_color_theme("blue")
 
-# Tải bộ phát hiện khuôn mặt Haar Cascade của OpenCV
-FACE_CASCADE = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+PROTO_PATH = "deploy.prototxt"
+MODEL_PATH = "res10_300x300_ssd_iter_140000.caffemodel"
+
+# Kiểm tra sự tồn tại của file weights
+if not os.path.exists(PROTO_PATH) or not os.path.exists(MODEL_PATH):
+    print("❌ LỖI: Chưa tìm thấy 2 file model 'deploy.prototxt' và 'res10_300x300_ssd_iter_140000.caffemodel'!")
+    print("Vui lòng tải 2 file này về đặt cùng thư mục với file code Python.")
+    exit()
+
+net = cv2.dnn.readNetFromCaffe(PROTO_PATH, MODEL_PATH)
 
 POSES = [
     "1. Nhìn THẲNG vào camera",
@@ -21,6 +29,8 @@ POSES = [
     "5. Hơi NGỬA ĐẦU lên",
 ]
 
+TARGET_IMAGE_SIZE = (224, 224)
+
 
 class RegisterGUI(ctk.CTk):
 
@@ -28,7 +38,7 @@ class RegisterGUI(ctk.CTk):
         super().__init__()
 
         # Cấu hình cửa sổ
-        self.title("Đăng ký khuôn mặt đa góc độ")
+        self.title("Đăng ký khuôn mặt đa góc độ (OpenCV DNN)")
         self.geometry("800x670")
         self.resizable(False, False)
         self.protocol("WM_DELETE_WINDOW", self.close_app)
@@ -37,9 +47,11 @@ class RegisterGUI(ctk.CTk):
         self.cap = None
         self.running = False
         self.current_frame = None
-        self.detected_faces = []   # Lưu danh sách tọa độ khuôn mặt phát hiện được
+        self.detected_faces = []
         self.current_pose_idx = 0
         self.flash_until = 0
+        self.after_id = None
+        self.ctk_img_ref = None  # Giữ reference tránh leak bộ nhớ
 
         # Tiêu đề
         title = ctk.CTkLabel(
@@ -53,8 +65,8 @@ class RegisterGUI(ctk.CTk):
         self.camera_label = ctk.CTkLabel(
             self,
             text="Camera chưa mở",
-            width=640,
-            height=400,
+            width=480,
+            height=300,
             fg_color="#DDDDDD",
             corner_radius=8
         )
@@ -119,7 +131,7 @@ class RegisterGUI(ctk.CTk):
         )
         self.btn_exit.grid(row=0, column=3, padx=6)
 
-        # Trạng thái & Hướng dẫn góc
+        # Trạng thái & Hướng dẫn
         self.instruction_label = ctk.CTkLabel(
             self,
             text=f"Hướng dẫn: {POSES[0]}",
@@ -140,16 +152,20 @@ class RegisterGUI(ctk.CTk):
             return
 
         self.cap = cv2.VideoCapture(0, cv2.CAP_DSHOW)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+        self.cap.set(cv2.CAP_PROP_FPS, 30)
+
         if not self.cap.isOpened():
             self.cap = cv2.VideoCapture(0)
 
         if not self.cap.isOpened():
-            self.status.configure(text="Không thể kết nối với Camera!", text_color="red")
+            self.status.configure(text="❌ Không thể kết nối với Camera!", text_color="red")
             return
 
         self.running = True
         self.btn_start.configure(state="disabled")
-        self.status.configure(text="Camera đang hoạt động", text_color="black")
+        self.status.configure(text="Camera đang hoạt động (OpenCV DNN)", text_color="black")
         self.update_frame()
 
     def update_frame(self):
@@ -159,50 +175,58 @@ class RegisterGUI(ctk.CTk):
         ret, frame = self.cap.read()
         if ret:
             frame = cv2.flip(frame, 1)
-
-            # 1. Lưu ảnh gốc SẠCH (dùng để crop khuôn mặt khi lưu)
             self.current_frame = frame.copy()
 
-            # 2. Thực hiện Face Detection trên ảnh xám (để tăng tốc độ)
-            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            faces = FACE_CASCADE.detectMultiScale(
-                gray,
-                scaleFactor=1.1,
-                minNeighbors=5,
-                minSize=(100, 100)
-            )
-            self.detected_faces = faces  # Lưu vị trí khuôn mặt hiện tại
-
-            # 3. Vẽ hình Oval khung ngắm
+            # --- TRÍCH XUẤT KHUÔN MẶT BẰNG OPENCV DNN ---
             h, w = frame.shape[:2]
+            blob = cv2.dnn.blobFromImage(
+                cv2.resize(frame, (300, 300)), 1.0, (300, 300), (104.0, 177.0, 123.0)
+            )
+            net.setInput(blob)
+            detections = net.forward()
+
+            self.detected_faces = []
+
+            for i in range(0, detections.shape[2]):
+                confidence = detections[0, 0, i, 2]
+                if confidence > 0.5:
+                    box = detections[0, 0, i, 3:7] * [w, h, w, h]
+                    (startX, startY, endX, endY) = box.astype("int")
+
+                    fw = endX - startX
+                    fh = endY - startY
+
+                    startX, startY = max(0, startX), max(0, startY)
+                    self.detected_faces.append((startX, startY, fw, fh))
+
+            # Vẽ khung Oval cố định định hướng
             center = (w // 2, h // 2)
             axes = (100, 160)
 
-            # Màu chớp khi chụp thành công
             if time.time() < self.flash_until:
-                oval_color = (0, 255, 0)  # Green
+                oval_color = (0, 255, 0)
                 thickness = 4
             else:
-                oval_color = (255, 255, 0)  # Cyan
+                oval_color = (255, 255, 0)
                 thickness = 2
 
             cv2.ellipse(frame, center, axes, 0, 0, 360, oval_color, thickness)
 
-            # 4. Vẽ khung Bounding Box quanh các khuôn mặt tìm thấy
-            for (x, y, fw, fh) in faces:
+            # Vẽ Bounding Box quanh mặt phát hiện được
+            for (x, y, fw, fh) in self.detected_faces:
                 cv2.rectangle(frame, (x, y), (x + fw, y + fh), (0, 255, 255), 2)
                 cv2.putText(
                     frame, "Face Detected", (x, y - 10),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2
                 )
 
-            # Đổi sang RGB để hiển thị trên GUI
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            image = Image.fromarray(frame_rgb)
-            ctk_img = ctk.CTkImage(light_image=image, dark_image=image, size=(640, 400))
-            self.camera_label.configure(image=ctk_img, text="")
+            # Render ảnh lên Tkinter
+            image = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+            self.ctk_img_ref = ctk.CTkImage(light_image=image, dark_image=image, size=(480, 300))
+            self.camera_label.configure(image=self.ctk_img_ref, text="")
 
-        self.after(30, self.update_frame)
+        if self.running:
+            self.after_id = self.after(30, self.update_frame)
 
     def capture_face(self):
         if self.current_frame is None or not self.running:
@@ -214,21 +238,18 @@ class RegisterGUI(ctk.CTk):
             self.status.configure(text="Vui lòng nhập họ và tên!", text_color="red")
             return
 
-        # Kiểm tra điều kiện Face Detection
         if len(self.detected_faces) == 0:
-            self.status.configure(text="⚠️ Không tìm thấy khuôn mặt nào! Hãy đứng vào khung hình.", text_color="red")
+            self.status.configure(text="⚠️ Không tìm thấy khuôn mặt nào!", text_color="red")
             return
         elif len(self.detected_faces) > 1:
-            self.status.configure(text="⚠️ Phát hiện nhiều hơn 1 khuôn mặt! Chỉ chụp 1 người.", text_color="red")
+            self.status.configure(text="⚠️ Phát hiện nhiều hơn 1 khuôn mặt! Chỉ giữ 1 người.", text_color="red")
             return
 
-        # Khóa ô nhập tên trong quá trình chụp
         self.name_entry.configure(state="disabled")
 
-        # Lấy vị trí khuôn mặt duy nhất
         (x, y, w, h) = self.detected_faces[0]
 
-        # Mở rộng biên (padding) thêm 20% quanh mặt để lấy trọn cằm và tóc
+        # Lấy viền bổ sung (Padding 20%)
         img_h, img_w = self.current_frame.shape[:2]
         pad_x = int(w * 0.2)
         pad_y = int(h * 0.2)
@@ -238,10 +259,15 @@ class RegisterGUI(ctk.CTk):
         x2 = min(img_w, x + w + pad_x)
         y2 = min(img_h, y + h + pad_y)
 
-        # Cắt khuôn mặt từ ảnh gốc
         face_crop = self.current_frame[y1:y2, x1:x2]
 
-        # Tạo thư mục lưu trữ
+        if face_crop.size == 0:
+            self.status.configure(text="⚠️ Khuôn mặt quá gần mép màn hình!", text_color="red")
+            return
+
+        face_crop = cv2.resize(face_crop, TARGET_IMAGE_SIZE, interpolation=cv2.INTER_AREA)
+
+        # Làm sạch ký tự đặc biệt khỏi tên để tạo thư mục
         forbidden_chars = r'\/:*?"<>|'
         clean_name = "".join([c for c in name if c not in forbidden_chars])
         user_dir = os.path.join("dataset", clean_name)
@@ -249,16 +275,12 @@ class RegisterGUI(ctk.CTk):
 
         filename = os.path.join(user_dir, f"goc_{self.current_pose_idx + 1}.jpg")
 
-        # Lưu ảnh đã CROP
         is_success, buffer = cv2.imencode(".jpg", face_crop)
         if is_success:
             with open(filename, "wb") as f:
                 f.write(buffer)
 
-            # Tín hiệu chớp xanh lá
             self.flash_until = time.time() + 0.3
-
-            # Chuyển góc tiếp theo
             self.current_pose_idx += 1
 
             if self.current_pose_idx < len(POSES):
@@ -267,7 +289,7 @@ class RegisterGUI(ctk.CTk):
                     text_color="#1F618D"
                 )
                 self.status.configure(
-                    text=f"Đã chụp & cắt khuôn mặt góc {self.current_pose_idx}/{len(POSES)}!",
+                    text=f"Đã chụp góc {self.current_pose_idx}/{len(POSES)} thành công!",
                     text_color="green"
                 )
             else:
@@ -276,7 +298,7 @@ class RegisterGUI(ctk.CTk):
                     text_color="green"
                 )
                 self.status.configure(
-                    text=f"Đã đăng ký đầy đủ {len(POSES)} góc cho '{clean_name}'!",
+                    text=f"Đã hoàn tất đăng ký cho '{clean_name}'!",
                     text_color="green"
                 )
                 self.btn_register.configure(state="disabled")
@@ -293,6 +315,9 @@ class RegisterGUI(ctk.CTk):
 
     def close_app(self):
         self.running = False
+        if self.after_id is not None:
+            self.after_cancel(self.after_id)
+            self.after_id = None
         if self.cap is not None:
             self.cap.release()
             self.cap = None
