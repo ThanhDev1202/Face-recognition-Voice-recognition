@@ -1,0 +1,16 @@
+# Dữ liệu hình ảnh & Folder Dataset
+dataset/
+*.jpg
+*.jpeg
+*.png
+
+# Cấu hình VS Code
+.vscode/
+
+# File rác Python
+__pycache__/
+*.py[cod]
+
+# Môi trường ảo (nếu có)
+venv/
+.venv/
