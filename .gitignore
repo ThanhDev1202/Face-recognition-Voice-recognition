@@ -14,3 +14,9 @@ __pycache__/
 # Môi trường ảo (nếu có)
 venv/
 .venv/
+
+# AI Models
+model/
+
+# User data
+database/
