@@ -6,15 +6,16 @@ import cv2
 import numpy as np
 import customtkinter as ctk
 import sounddevice as sd
-from PIL import Image, ImageTk
+from PIL import Image
 from tkinter import messagebox
 
-# Thêm thư mục gốc dự án vào sys.path để import recognizer & detector
+# Thêm thư mục gốc dự án vào sys.path để import các module
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from recognizer.FaceRecognizer import FaceRecognizer
 from recognizer.VoiceRecognizer import VoiceRecognizer
-from detector.FaceDetector import FaceDetector  # Giả định bạn có FaceDetector
+from detector.FaceDetector import FaceDetector
+from PreProcess.VoicePreProcess import VoicePreprocessor
 
 
 class RegisterWindow(ctk.CTk):
@@ -32,13 +33,14 @@ class RegisterWindow(ctk.CTk):
         self.cap = None
         self.is_camera_running = False
 
-        # Khởi tạo AI Recognition Models
+        # Khởi tạo AI Models & Preprocessor
         try:
-            self.face_detector = FaceDetector()  # Detector dùng để lấy 5 landmarks
+            self.face_detector = FaceDetector()  # Detector lấy 5 landmarks
             self.face_recognizer = FaceRecognizer(model_path="model/w600k_mbf.onnx")
             self.voice_recognizer = VoiceRecognizer(model_dir="model/Voice")
+            self.voice_preprocessor = VoicePreprocessor(sample_rate=16000)
         except Exception as e:
-            messagebox.showerror("Lỗi Khởi Tạo AI", f"Không thể nạp model AI:\n{e}")
+            messagebox.showerror("Lỗi Khởi Tạo AI", f"Không thể nạp model/preprocessor:\n{e}")
 
         # ==========================================
         # Bố cục Giao diện (2 Cột Left/Right)
@@ -143,12 +145,12 @@ class RegisterWindow(ctk.CTk):
                 bboxes, landmarks = self.face_detector.detect(frame)
 
                 if len(landmarks) > 0:
-                    # 2. Dùng FaceRecognizer trích xuất embedding trực tiếp
+                    # 2. Dùng FaceRecognizer trích xuất embedding
                     self.face_embedding = self.face_recognizer.extract_embedding(frame, landmarks[0])
 
                     # Dừng camera
                     self.stop_camera()
-                    self.lbl_camera.configure(text="Đã chụp khuôn mặt ✓", fg_color="#2b8a3e")
+                    self.lbl_camera.configure(text="Đã chụp khuôn mặt ✓", fg_color="#2b8a3e", image="")
                     self.btn_capture_face.configure(text="Khuôn mặt đã lưu ✓", state="disabled", fg_color="#2b8a3e")
 
                     # Kích hoạt nút ghi âm
@@ -177,7 +179,7 @@ class RegisterWindow(ctk.CTk):
             self.cap = None
 
     # #####################################################
-    # TRỰC TIẾP LẤY EMBEDDING GIỌNG NÓI
+    # GHI ÂM & TIỀN XỬ LÝ ÂM THANH (THREAD-SAFE)
     # #####################################################
 
     def record_voice(self):
@@ -188,31 +190,50 @@ class RegisterWindow(ctk.CTk):
         duration = 3.0
         sample_rate = 16000
 
-        self.lbl_voice_status.configure(text="Đang ghi âm, hãy nói...", text_color="#e67e22")
+        # Cập nhật UI ban đầu trên Main Thread
+        self.after(0, lambda: self.lbl_voice_status.configure(text="Đang ghi âm, hãy nói...", text_color="#e67e22"))
 
-        # 1. Thu âm từ Micro
+        # 1. Ghi âm từ microphone
         num_samples = int(duration * sample_rate)
         recording = sd.rec(num_samples, samplerate=sample_rate, channels=1, dtype="float32")
 
         start_time = time.time()
         while time.time() - start_time < duration:
             elapsed = time.time() - start_time
-            self.progress_voice.set(elapsed / duration)
+            prog = elapsed / duration
+            self.after(0, lambda p=prog: self.progress_voice.set(p))
             time.sleep(0.05)
 
         sd.wait()
-        self.progress_voice.set(1.0)
+        self.after(0, lambda: self.progress_voice.set(1.0))
 
-        # 2. Dùng VoiceRecognizer trích xuất embedding trực tiếp
-        self.lbl_voice_status.configure(text="Đang phân tích giọng nói...", text_color="#3498db")
-        audio_data = recording.flatten()
+        # Cập nhật trạng thái xử lý
+        self.after(0, lambda: self.lbl_voice_status.configure(text="Đang tiền xử lý & phân tích...", text_color="#3498db"))
 
-        self.voice_embedding = self.voice_recognizer.extract_embedding_from_array(
-            audio_data,
-            sample_rate=sample_rate
-        )
+        # 2. Tiền xử lý tín hiệu bằng VoicePreprocessor
+        raw_audio = recording.flatten()
+        clean_audio = self.voice_preprocessor.process(raw_audio)
 
-        # Cập nhật UI sau khi hoàn tất
+        # Kiểm tra độ dài âm thanh sau khi cắt khoảng lặng
+        if len(clean_audio) < int(sample_rate * 0.8):
+            self.after(0, lambda: messagebox.showwarning("Cảnh báo", "Không phát hiện giọng nói hoặc âm thanh quá nhỏ! Hãy thử lại."))
+            self.after(0, lambda: self.lbl_voice_status.configure(text="Thử ghi âm lại...", text_color="#e74c3c"))
+            self.after(0, lambda: self.btn_record_voice.configure(state="normal"))
+            return
+
+        # 3. Trích xuất Embedding từ âm thanh đã tiền xử lý
+        try:
+            self.voice_embedding = self.voice_recognizer.extract_embedding_from_array(
+                clean_audio,
+                sample_rate=sample_rate
+            )
+            # Chuyển về Main Thread để hoàn tất UI
+            self.after(0, self._on_voice_success)
+        except Exception as e:
+            self.after(0, lambda: messagebox.showerror("Lỗi Ghi Âm", f"Không thể xử lý giọng nói:\n{e}"))
+            self.after(0, lambda: self.btn_record_voice.configure(state="normal"))
+
+    def _on_voice_success(self):
         self.lbl_voice_status.configure(text="Đã ghi âm giọng nói ✓", text_color="#2ecc71")
         self.btn_record_voice.configure(text="Giọng nói đã lưu ✓", state="disabled", fg_color="#2b8a3e")
 
@@ -236,8 +257,14 @@ class RegisterWindow(ctk.CTk):
             os.makedirs("database/face_embeddings", exist_ok=True)
             os.makedirs("database/voice_embeddings", exist_ok=True)
 
+            # Kiểm tra xem user đã tồn tại chưa
+            face_path = f"database/face_embeddings/{username}.npy"
+            if os.path.exists(face_path):
+                if not messagebox.askyesno("Xác nhận", f"Tài khoản '{username}' đã tồn tại. Bạn có muốn GHI ĐÈ không?"):
+                    return
+
             # Lưu vector dạng .npy
-            np.save(f"database/face_embeddings/{username}.npy", self.face_embedding)
+            np.save(face_path, self.face_embedding)
             np.save(f"database/voice_embeddings/{username}.npy", self.voice_embedding)
 
             messagebox.showinfo("Thành công", f"Đã đăng ký thành công cho tài khoản: {username}")

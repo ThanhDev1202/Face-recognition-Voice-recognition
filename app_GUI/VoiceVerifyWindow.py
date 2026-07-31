@@ -7,8 +7,11 @@ import customtkinter as ctk
 import sounddevice as sd
 from tkinter import messagebox
 
+# Thêm thư mục gốc dự án vào sys.path để import các module
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from recognizer.VoiceRecognizer import VoiceRecognizer
+from PreProcess.VoicePreProcess import VoicePreprocessor
 
 
 class VoiceVerifyWindow(ctk.CTkToplevel):
@@ -21,11 +24,12 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
         self.duration = duration  # Thời gian ghi âm (giây)
         self.result = False
 
-        # Khởi tạo AI Recognizer
+        # Khởi tạo AI Recognizer & Preprocessor
         try:
             self.recognizer = VoiceRecognizer(model_dir="model/Voice")
+            self.preprocessor = VoicePreprocessor(sample_rate=self.sample_rate)
         except Exception as e:
-            messagebox.showerror("Lỗi Model", f"Không thể tải model giọng nói:\n{e}")
+            messagebox.showerror("Lỗi Khởi Tạo", f"Không thể tải model hoặc preprocessor giọng nói:\n{e}")
             self.destroy()
             return
 
@@ -101,16 +105,31 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
             sd.wait()  # Chờ thu âm hoàn tất
             self._update_ui(self.progress_bar.set, 1.0)
 
-            # 2. Xử lý AI Trích xuất Feature Embedding
+            # 2. Tiền xử lý âm thanh (Bandpass Filter, Trim Silence, Normalize)
+            self._update_ui(self.lbl_status.configure, text="Đang tiền xử lý & làm sạch âm thanh...", text_color="#3498db")
+            
+            raw_audio = recording.flatten()
+            clean_audio = self.preprocessor.process(raw_audio)
+
+            # Kiểm tra xem có giọng nói thực sự không
+            if len(clean_audio) < int(self.sample_rate * 0.8):
+                self._update_ui(
+                    self.lbl_status.configure, 
+                    text="Không phát hiện giọng nói hoặc âm thanh quá nhỏ!", 
+                    text_color="#e74c3c"
+                )
+                self._update_ui(self.btn_record.configure, state="normal")
+                return
+
+            # 3. Trích xuất Feature Embedding từ âm thanh đã xử lý
             self._update_ui(self.lbl_status.configure, text="Đang phân tích đặc trưng giọng nói...", text_color="#3498db")
             
-            audio_data = recording.flatten()
             live_embedding = self.recognizer.extract_embedding_from_array(
-                audio_data, 
+                clean_audio, 
                 sample_rate=self.sample_rate
             )
 
-            # 3. Lấy Embedding mẫu từ DB/File
+            # 4. Lấy Embedding mẫu đã đăng ký từ DB/File
             enrolled_embedding = self._get_user_enrolled_embedding(self.username)
 
             if enrolled_embedding is None:
@@ -118,7 +137,7 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
                 self._update_ui(self.btn_record.configure, state="normal")
                 return
 
-            # 4. Tính Cosine Similarity & Đánh giá
+            # 5. Tính Cosine Similarity & Đánh giá
             similarity = self.recognizer.compute_cosine_similarity(live_embedding, enrolled_embedding)
             THRESHOLD = 0.68 
 
