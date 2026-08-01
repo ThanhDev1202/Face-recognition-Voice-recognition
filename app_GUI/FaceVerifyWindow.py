@@ -38,7 +38,7 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         self.recognizer = FaceRecognizer(model_path="model/w600k_mbf.onnx")
 
         # Ngưỡng so sánh Cosine Similarity
-        self.THRESHOLD = 0.40
+        self.THRESHOLD = 0.80
 
         # Camera
         self.camera = Camera(camera_index=0, width=640, height=480)
@@ -136,7 +136,6 @@ class FaceVerifyWindow(ctk.CTkToplevel):
 
         # 3. Trích xuất Feature Embedding từ ảnh live
         embedding_live = self.recognizer.extract_embedding(frame, landmarks)
-        print(embedding_live)
         # 4. Tải vector khuôn mặt mẫu trong cơ sở dữ liệu/file
         embedding_db = self.load_user_embedding_from_db(self.username)
 

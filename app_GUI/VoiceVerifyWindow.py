@@ -140,6 +140,7 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
             # 5. Tính Cosine Similarity & Đánh giá
             similarity = self.recognizer.compute_cosine_similarity(live_embedding, enrolled_embedding)
             THRESHOLD = 0.68 
+            print(f"[Xác thực] User: {self.username} | Similarity: {similarity:.4f} | Threshold: {THRESHOLD:.2f}")
 
             if similarity >= THRESHOLD:
                 self.result = True
