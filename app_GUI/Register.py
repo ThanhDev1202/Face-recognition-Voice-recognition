@@ -11,27 +11,30 @@ from tkinter import messagebox
 
 # Thêm thư mục gốc dự án vào sys.path để import các module
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
+from Camera_Recorder.Camera import Camera
 from recognizer.FaceRecognizer import FaceRecognizer
 from recognizer.VoiceRecognizer import VoiceRecognizer
 from detector.FaceDetector import FaceDetector
 from PreProcess.VoicePreProcess import VoicePreprocessor
 
-
+# =========================================================
+# GIAO DIỆN ĐĂNG KÝ MFA
+# =========================================================
 class RegisterWindow(ctk.CTk):
 
     def __init__(self):
         super().__init__()
 
         self.title("Đăng ký sinh trắc học MFA")
-        self.geometry("850x480")
+        self.geometry("850x500")
         self.resizable(False, False)
+
+        # Sử dụng đối tượng Camera
+        self.camera = Camera(camera_index=0, width=640, height=480)
 
         # Biến lưu trữ dữ liệu khuôn mặt & giọng nói
         self.face_embedding = None
         self.voice_embedding = None
-        self.cap = None
-        self.is_camera_running = False
 
         # --- Cấu hình thu thập đa góc mặt ---
         self.face_embeddings_list = []
@@ -44,7 +47,7 @@ class RegisterWindow(ctk.CTk):
 
         # --- Cấu hình thu thập đa mẫu giọng nói ---
         self.voice_embeddings_list = []
-        self.MAX_VOICE_SAMPLES = 3  # Số lần ghi âm mong muốn
+        self.MAX_VOICE_SAMPLES = 3
         self.voice_guides = [
             "Lần 1/3: Nói một cách tự nhiên",
             "Lần 2/3: Nói lại câu vừa rồi với tốc độ bình thường",
@@ -53,7 +56,7 @@ class RegisterWindow(ctk.CTk):
 
         # Khởi tạo AI Models & Preprocessor
         try:
-            self.face_detector = FaceDetector()  # Detector lấy 5 landmarks
+            self.face_detector = FaceDetector()
             self.face_recognizer = FaceRecognizer(model_path="model/w600k_mbf.onnx")
             self.voice_recognizer = VoiceRecognizer(model_dir="model/Voice")
             self.voice_preprocessor = VoicePreprocessor(sample_rate=16000)
@@ -61,7 +64,7 @@ class RegisterWindow(ctk.CTk):
             messagebox.showerror("Lỗi Khởi Tạo AI", f"Không thể nạp model/preprocessor:\n{e}")
 
         # ==========================================
-        # Bố cục Giao diện (2 Cột Left/Right)
+        # Bố cục Giao diện
         # ==========================================
         self.grid_columnconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -72,7 +75,6 @@ class RegisterWindow(ctk.CTk):
 
         ctk.CTkLabel(left_frame, text="1. Thu thập Khuôn mặt", font=("Arial", 16, "bold")).pack(pady=(10, 2))
 
-        # Label hướng dẫn người dùng góc chụp
         self.lbl_guide = ctk.CTkLabel(
             left_frame,
             text="Nhấn nút bên dưới để bắt đầu mở Camera",
@@ -81,16 +83,28 @@ class RegisterWindow(ctk.CTk):
         )
         self.lbl_guide.pack(pady=(0, 5))
 
-        # Màn hình hiển thị Camera
         self.lbl_camera = ctk.CTkLabel(left_frame, text="Camera Off", width=360, height=270, fg_color="black")
         self.lbl_camera.pack(pady=5)
 
+        face_btn_frame = ctk.CTkFrame(left_frame, fg_color="transparent")
+        face_btn_frame.pack(fill="x", padx=10, pady=10)
+
         self.btn_capture_face = ctk.CTkButton(
-            left_frame,
-            text="📸 Bắt đầu Camera & Chụp mặt",
+            face_btn_frame,
+            text="📸 Bắt đầu & Chụp mặt",
             command=self.capture_face
         )
-        self.btn_capture_face.pack(pady=15)
+        self.btn_capture_face.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
+        self.btn_reset_face = ctk.CTkButton(
+            face_btn_frame,
+            text="🔄 Chụp lại",
+            width=90,
+            fg_color="#e67e22",
+            hover_color="#d35400",
+            command=self.reset_face
+        )
+        self.btn_reset_face.pack(side="right")
 
         # --- CỘT PHẢI: GIỌNG NÓI & HOÀN TẤT ---
         right_frame = ctk.CTkFrame(self)
@@ -98,12 +112,10 @@ class RegisterWindow(ctk.CTk):
 
         ctk.CTkLabel(right_frame, text="2. Thu thập Giọng nói & Tài khoản", font=("Arial", 16, "bold")).pack(pady=10)
 
-        # Username Input
         ctk.CTkLabel(right_frame, text="Tên đăng nhập:", font=("Arial", 13)).pack(anchor="w", padx=30, pady=(10, 2))
         self.entry_user = ctk.CTkEntry(right_frame, width=300, placeholder_text="Nhập username...")
-        self.entry_user.pack(pady=(0, 15))
+        self.entry_user.pack(pady=(0, 10))
 
-        # Status & Progress Bar Ghi âm
         self.lbl_voice_status = ctk.CTkLabel(
             right_frame,
             text="Nhấn nút để ghi âm (3 giây)",
@@ -114,21 +126,32 @@ class RegisterWindow(ctk.CTk):
 
         self.progress_voice = ctk.CTkProgressBar(right_frame, width=300)
         self.progress_voice.set(0)
-        self.progress_voice.pack(pady=10)
+        self.progress_voice.pack(pady=5)
+
+        voice_btn_frame = ctk.CTkFrame(right_frame, fg_color="transparent")
+        voice_btn_frame.pack(fill="x", padx=25, pady=10)
 
         self.btn_record_voice = ctk.CTkButton(
-            right_frame,
-            text="🎤 Ghi âm giọng nói (Lần 1/3)",
+            voice_btn_frame,
+            text="🎤 Ghi âm mẫu (1/3)",
             command=self.record_voice,
             state="disabled",
             fg_color="gray30"
         )
-        self.btn_record_voice.pack(pady=15)
+        self.btn_record_voice.pack(side="left", fill="x", expand=True, padx=(0, 5))
 
-        # Separator Line
-        ctk.CTkFrame(right_frame, height=2, fg_color="gray50").pack(fill="x", padx=30, pady=15)
+        self.btn_reset_voice = ctk.CTkButton(
+            voice_btn_frame,
+            text="🔄 Ghi âm lại",
+            width=90,
+            fg_color="#e67e22",
+            hover_color="#d35400",
+            command=self.reset_voice
+        )
+        self.btn_reset_voice.pack(side="right")
 
-        # Nút Hoàn tất
+        ctk.CTkFrame(right_frame, height=2, fg_color="gray50").pack(fill="x", padx=30, pady=10)
+
         self.btn_submit = ctk.CTkButton(
             right_frame,
             text="Hoàn tất Đăng ký",
@@ -138,13 +161,62 @@ class RegisterWindow(ctk.CTk):
             state="disabled",
             fg_color="gray30"
         )
-        self.btn_submit.pack(pady=10)
+        self.btn_submit.pack(fill="x", padx=30, pady=5)
 
-        # Sự kiện đóng cửa sổ
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
     # #####################################################
-    # TRỰC TIẾP LẤY EMBEDDING KHUÔN MẶT (ĐA GÓC CHỤP)
+    # CÁC HÀM RESET
+    # #####################################################
+
+    def reset_face(self):
+        """Đặt lại toàn bộ quá trình chụp ảnh khuôn mặt"""
+        self.stop_camera()
+        self.face_embedding = None
+        self.face_embeddings_list = []
+        self.entry_user.configure(state="normal")
+
+        self.lbl_guide.configure(
+            text="Nhấn nút bên dưới để bắt đầu mở Camera",
+            text_color="#3498db"
+        )
+        self.lbl_camera.configure(text="Camera Off", image="", fg_color="black")
+        self.btn_capture_face.configure(
+            text="📸 Bắt đầu & Chụp mặt",
+            state="normal",
+            fg_color=["#3a7ebf", "#1f538d"]
+        )
+
+        self.btn_submit.configure(state="disabled", fg_color="gray30")
+
+    def reset_voice(self):
+        """Đặt lại toàn bộ quá trình ghi âm giọng nói"""
+        self.voice_embedding = None
+        self.voice_embeddings_list = []
+
+        self.lbl_voice_status.configure(
+            text="Nhấn nút để ghi âm (3 giây)",
+            text_color="gray70"
+        )
+        self.progress_voice.set(0)
+
+        if self.face_embedding is not None:
+            self.btn_record_voice.configure(
+                text=f"🎤 Ghi âm mẫu (1/{self.MAX_VOICE_SAMPLES})",
+                state="normal",
+                fg_color=["#3a7ebf", "#1f538d"]
+            )
+        else:
+            self.btn_record_voice.configure(
+                text=f"🎤 Ghi âm mẫu (1/{self.MAX_VOICE_SAMPLES})",
+                state="disabled",
+                fg_color="gray30"
+            )
+
+        self.btn_submit.configure(state="disabled", fg_color="gray30")
+
+    # #####################################################
+    # TẬN DỤNG LỚP CAMERA ĐỂ CHỤP VÀ HIỂN THỊ
     # #####################################################
 
     def capture_face(self):
@@ -153,92 +225,99 @@ class RegisterWindow(ctk.CTk):
             messagebox.showwarning("Thông báo", "Vui lòng nhập Tên đăng nhập trước!")
             return
 
-        # Khóa Username để không sửa giữa chừng
         self.entry_user.configure(state="disabled")
 
-        # --- BƯỚC 1: KHỞI TẠO CAMERA ---
-        if not self.is_camera_running:
-            self.cap = cv2.VideoCapture(0)
-            if not self.cap.isOpened():
+        # BƯỚC 1: Khởi tạo & Mở camera bằng lớp Camera
+        if not self.camera.running:
+            success = self.camera.start()
+            if not success:
                 messagebox.showerror("Lỗi", "Không thể mở Webcam!")
+                self.entry_user.configure(state="normal")
                 return
-            
-            self.is_camera_running = True
-            self.face_embeddings_list = []  # Reset danh sách vector
-            
-            # Cập nhật GUI cho mẫu đầu tiên
+
+            self.face_embeddings_list = []
             self.lbl_guide.configure(text=f"📸 {self.face_guides[0]}", text_color="#e67e22")
             self.btn_capture_face.configure(text="📸 Chụp góc hiện tại", fg_color="#e67e22")
+
             self.update_camera_feed()
 
-        # --- BƯỚC 2: THU THẬP TỪNG GÓC MẶT ---
+        # BƯỚC 2: Lấy frame mới nhất thông qua get_frame() để đưa sang Thread AI
         else:
-            ret, frame = self.cap.read()
-            if ret:
-                # Đảm bảo đồng bộ lật gương (Mirror) giữa camera feed và frame xử lý
-                frame = cv2.flip(frame, 1)
+            current_frame = self.camera.get_frame(copy=True)
+            if current_frame is None:
+                messagebox.showwarning("Cảnh báo", "Chưa nhận được tín hiệu hình ảnh từ camera!")
+                return
 
-                # 1. Phát hiện khuôn mặt & Lấy 5 landmarks
-                bboxes, landmarks = self.face_detector.detect(frame)
+            self.btn_capture_face.configure(state="disabled")
 
-                if len(landmarks) > 0:
-                    # Trích xuất & Chuẩn hóa L2 cho vector thành phần
-                    emb = self.face_recognizer.extract_embedding(frame, landmarks[0])
-                    emb = emb / np.linalg.norm(emb)
-                    self.face_embeddings_list.append(emb)
+            # Xử lý lật ảnh cho giống kính soi (như lúc vẽ GUI)
+            flipped_frame = cv2.flip(current_frame, 1)
 
-                    count = len(self.face_embeddings_list)
+            threading.Thread(
+                target=self._process_face_thread,
+                args=(flipped_frame,),
+                daemon=True
+            ).start()
 
-                    # Chưa đủ 3 góc mặt
-                    if count < self.MAX_FACE_SAMPLES:
-                        next_guide = self.face_guides[count]
-                        self.lbl_guide.configure(text=f"📸 {next_guide}", text_color="#e67e22")
-                        self.btn_capture_face.configure(text=f"📸 Chụp tiếp ({count}/{self.MAX_FACE_SAMPLES})")
-                    
-                    # Đã gom đủ 3 mẫu
-                    else:
-                        # Tính Centroid Vector (Trung bình cộng) & Chuẩn hóa L2 lần cuối
-                        avg_emb = np.mean(self.face_embeddings_list, axis=0)
-                        self.face_embedding = avg_emb / np.linalg.norm(avg_emb)
+    def _process_face_thread(self, frame):
+        """Xử lý AI tách biệt hoàn toàn khỏi Main UI Thread"""
+        bboxes, landmarks = self.face_detector.detect(frame)
 
-                        # Dừng camera & Cập nhật UI Hoàn tất
-                        self.stop_camera()
-                        self.lbl_guide.configure(text="Đã hoàn tất thu thập khuôn mặt!", text_color="#2ecc71")
-                        self.lbl_camera.configure(text=f"Đã lưu đủ {self.MAX_FACE_SAMPLES} góc mặt ✓", fg_color="#2b8a3e", image="")
-                        self.btn_capture_face.configure(text="Khuôn mặt đã lưu ✓", state="disabled", fg_color="#2b8a3e")
+        if len(landmarks) > 0:
+            emb = self.face_recognizer.extract_embedding(frame, landmarks[0])
+            emb = emb / np.linalg.norm(emb)
+            self.face_embeddings_list.append(emb)
 
-                        # Kích hoạt bước tiếp theo (Ghi âm)
-                        self.btn_record_voice.configure(
-                            state="normal",
-                            fg_color=["#3a7ebf", "#1f538d"],
-                            text=f"🎤 Ghi âm mẫu (1/{self.MAX_VOICE_SAMPLES})"
-                        )
-                        messagebox.showinfo("Thành công", f"Đã trích xuất & tổng hợp đặc trưng từ {self.MAX_FACE_SAMPLES} góc mặt thành công!")
-                else:
-                    messagebox.showwarning("Cảnh báo", "Không tìm thấy khuôn mặt trong khung hình! Hãy giữ nguyên tư thế và thử lại.")
+            count = len(self.face_embeddings_list)
+
+            if count < self.MAX_FACE_SAMPLES:
+                next_guide = self.face_guides[count]
+                self.after(0, lambda: self.lbl_guide.configure(text=f"📸 {next_guide}", text_color="#e67e22"))
+                self.after(0, lambda: self.btn_capture_face.configure(
+                    text=f"📸 Chụp tiếp ({count}/{self.MAX_FACE_SAMPLES})",
+                    state="normal"
+                ))
+            else:
+                avg_emb = np.mean(self.face_embeddings_list, axis=0)
+                self.face_embedding = avg_emb / np.linalg.norm(avg_emb)
+
+                self.after(0, self._on_face_complete)
+        else:
+            self.after(0, lambda: messagebox.showwarning("Cảnh báo", "Không tìm thấy khuôn mặt trong khung hình! Hãy giữ nguyên tư thế và thử lại."))
+            self.after(0, lambda: self.btn_capture_face.configure(state="normal"))
+
+    def _on_face_complete(self):
+        """Callback khi đã thu thập đủ 3 góc khuôn mặt"""
+        self.stop_camera()
+        self.lbl_guide.configure(text="Đã hoàn tất thu thập khuôn mặt!", text_color="#2ecc71")
+        self.lbl_camera.configure(text=f"Đã lưu đủ {self.MAX_FACE_SAMPLES} góc mặt ✓", fg_color="#2b8a3e", image="")
+        self.btn_capture_face.configure(text="Khuôn mặt đã lưu ✓", state="disabled", fg_color="#2b8a3e")
+
+        self.btn_record_voice.configure(
+            state="normal",
+            fg_color=["#3a7ebf", "#1f538d"],
+            text=f"🎤 Ghi âm mẫu (1/{self.MAX_VOICE_SAMPLES})"
+        )
+        messagebox.showinfo("Thành công", f"Đã trích xuất & tổng hợp đặc trưng từ {self.MAX_FACE_SAMPLES} góc mặt thành công!")
 
     def update_camera_feed(self):
-        if self.is_camera_running and self.cap is not None:
-            ret, frame = self.cap.read()
-            if ret:
-                # Lật gương webcam
+        """Cập nhật giao diện Tkinter bằng cách lấy frame liên tục từ Camera thread"""
+        if self.camera.running:
+            frame = self.camera.get_frame(copy=True)
+            if frame is not None:
                 frame = cv2.flip(frame, 1)
 
-                # Lấy kích thước khung hình camera
                 height, width, _ = frame.shape
                 center_x, center_y = width // 2, height // 2
-
-                # Kích thước của khung Oval (Bán trục ngang a = 110, Bán trục dọc b = 150)
                 axis_x, axis_y = 110, 150
 
-                # 1. Vẽ khung Oval hướng dẫn
-                cv2.ellipse(frame, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, (0, 255, 255), 2) # Color: Yellow (BGR)
+                # Vẽ Oval hướng dẫn
+                cv2.ellipse(frame, (center_x, center_y), (axis_x, axis_y), 0, 0, 360, (0, 255, 255), 2)
 
-                # 2. Vẽ dòng text hướng dẫn trực tiếp lên luồng Video
+                # Vẽ Text hướng dẫn
                 current_step = len(self.face_embeddings_list)
                 if current_step < self.MAX_FACE_SAMPLES:
                     guide_text = self.face_guides[current_step]
-                    # Vẽ chữ có viền đen phía sau để dễ đọc
                     cv2.putText(
                         frame, guide_text, (15, 35),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 0), 4, cv2.LINE_AA
@@ -248,24 +327,21 @@ class RegisterWindow(ctk.CTk):
                         cv2.FONT_HERSHEY_SIMPLEX, 0.65, (0, 255, 255), 2, cv2.LINE_AA
                     )
 
-                # Chuyển BGR -> RGB hiển thị lên Tkinter
                 rgb_img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 pil_img = Image.fromarray(rgb_img)
                 ctk_img = ctk.CTkImage(light_image=pil_img, dark_image=pil_img, size=(360, 270))
-                
+
                 self.lbl_camera.configure(image=ctk_img, text="")
-                self.lbl_camera.image = ctk_img  # Đảm bảo giữ reference tránh Garbage Collector
+                self.lbl_camera.image = ctk_img
 
             self.after(20, self.update_camera_feed)
 
     def stop_camera(self):
-        self.is_camera_running = False
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
+        """Gọi hàm stop() của Camera class"""
+        self.camera.stop()
 
     # #####################################################
-    # GHI ÂM ĐA MẪU & TIỀN XỬ LÝ ÂM THANH (THREAD-SAFE)
+    # GHI ÂM ĐA MẪU
     # #####################################################
 
     def record_voice(self):
@@ -277,63 +353,56 @@ class RegisterWindow(ctk.CTk):
         sample_rate = 16000
         current_step = len(self.voice_embeddings_list)
 
-        # Cập nhật GUI thông báo bước ghi âm hiện tại
         guide_text = self.voice_guides[current_step] if current_step < len(self.voice_guides) else "Đang ghi âm..."
         self.after(0, lambda: self.lbl_voice_status.configure(
             text=f"🎙️ {guide_text}...", text_color="#e67e22"
         ))
 
-        # 1. Ghi âm từ microphone
         num_samples = int(duration * sample_rate)
         recording = sd.rec(num_samples, samplerate=sample_rate, channels=1, dtype="float32")
 
         start_time = time.time()
         while time.time() - start_time < duration:
             elapsed = time.time() - start_time
-            prog = elapsed / duration
-            self.after(0, lambda p=prog: self.progress_voice.set(p))
+            prog = min(elapsed / duration, 1.0)
+            self.after(0, self._update_progress, prog)
             time.sleep(0.05)
 
         sd.wait()
-        self.after(0, lambda: self.progress_voice.set(1.0))
+        self.after(0, self._update_progress, 1.0)
 
-        # Cập nhật trạng thái xử lý
         self.after(0, lambda: self.lbl_voice_status.configure(text="Đang tiền xử lý & phân tích...", text_color="#3498db"))
 
-        # 2. Tiền xử lý tín hiệu
         raw_audio = recording.flatten()
         clean_audio = self.voice_preprocessor.process(raw_audio)
 
-        # Kiểm tra độ dài âm thanh sau khi VAD/cắt khoảng lặng
         if len(clean_audio) < int(sample_rate * 0.8):
             self.after(0, lambda: messagebox.showwarning("Cảnh báo", "Không phát hiện giọng nói hoặc âm thanh quá nhỏ! Hãy thử lại mẫu này."))
             self.after(0, lambda: self.lbl_voice_status.configure(text="Thử ghi âm lại lần này...", text_color="#e74c3c"))
             self.after(0, lambda: self.btn_record_voice.configure(state="normal"))
             return
 
-        # 3. Trích xuất Embedding & Chuẩn hóa L2 cho mẫu hiện tại
         try:
             emb = self.voice_recognizer.extract_embedding_from_array(
                 clean_audio,
                 sample_rate=sample_rate
             )
-            # Chuẩn hóa L2 từng mẫu riêng lẻ
             emb = emb / np.linalg.norm(emb)
             self.voice_embeddings_list.append(emb)
 
-            # Chuyển về Main Thread để cập nhật UI
             self.after(0, self._on_voice_sample_success)
 
         except Exception as e:
-            self.after(0, lambda: messagebox.showerror("Lỗi Ghi Âm", f"Không thể xử lý giọng nói:\n{e}"))
+            self.after(0, lambda e=e: messagebox.showerror("Lỗi Ghi Âm", f"Không thể xử lý giọng nói:\n{e}"))
             self.after(0, lambda: self.btn_record_voice.configure(state="normal"))
+
+    def _update_progress(self, val):
+        self.progress_voice.set(val)
 
     def _on_voice_sample_success(self):
         count = len(self.voice_embeddings_list)
 
-        # Kiểm tra xem đã đủ số mẫu chưa
         if count < self.MAX_VOICE_SAMPLES:
-            # Chưa đủ -> Cho phép bấm nút ghi âm mẫu tiếp theo
             self.lbl_voice_status.configure(
                 text=f"Đã lưu {count}/{self.MAX_VOICE_SAMPLES} mẫu giọng nói ✓. Nhấn nút để tiếp tục.",
                 text_color="#3498db"
@@ -344,11 +413,9 @@ class RegisterWindow(ctk.CTk):
             )
             self.progress_voice.set(0)
         else:
-            # Đã đủ mẫu -> Tính Vector Trung bình (Centroid) & L2 Normalize lần cuối
             avg_emb = np.mean(self.voice_embeddings_list, axis=0)
             self.voice_embedding = avg_emb / np.linalg.norm(avg_emb)
 
-            # Cập nhật UI Hoàn tất
             self.lbl_voice_status.configure(
                 text=f"Đã thu thập đủ {self.MAX_VOICE_SAMPLES} mẫu giọng nói ✓",
                 text_color="#2ecc71"
@@ -359,7 +426,6 @@ class RegisterWindow(ctk.CTk):
                 fg_color="#2b8a3e"
             )
 
-            # Kích hoạt nút Hoàn tất Đăng ký
             self.btn_submit.configure(state="normal", fg_color="#2b8a3e")
             messagebox.showinfo("Thành công", f"Đã trích xuất & tổng hợp đặc trưng từ {self.MAX_VOICE_SAMPLES} lần ghi âm thành công!")
 
@@ -375,17 +441,14 @@ class RegisterWindow(ctk.CTk):
             return
 
         try:
-            # Tạo thư mục lưu trữ nếu chưa có
             os.makedirs("database/face_embeddings", exist_ok=True)
             os.makedirs("database/voice_embeddings", exist_ok=True)
 
-            # Kiểm tra xem user đã tồn tại chưa
             face_path = f"database/face_embeddings/{username}.npy"
             if os.path.exists(face_path):
                 if not messagebox.askyesno("Xác nhận", f"Tài khoản '{username}' đã tồn tại. Bạn có muốn GHI ĐÈ không?"):
                     return
 
-            # Lưu vector dạng .npy
             np.save(face_path, self.face_embedding)
             np.save(f"database/voice_embeddings/{username}.npy", self.voice_embedding)
 
