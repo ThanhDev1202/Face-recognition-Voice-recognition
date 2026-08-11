@@ -4,7 +4,6 @@ from tkinter import messagebox
 from FaceVerifyWindow import FaceVerifyWindow
 from VoiceVerifyWindow import VoiceVerifyWindow
 
-
 class LoginWindow(ctk.CTk):
 
     def __init__(self):

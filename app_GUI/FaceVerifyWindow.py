@@ -6,6 +6,8 @@ import cv2
 import customtkinter as ctk
 from PIL import Image
 from tkinter import messagebox
+import csv
+from datetime import datetime
 
 # Thêm thư mục gốc dự án (thư mục 'python') vào sys.path
 sys.path.append(
@@ -145,15 +147,35 @@ class FaceVerifyWindow(ctk.CTkToplevel):
             return
 
         # 5. Tính Cosine Similarity
-        score = self.recognizer.compute_cosine_similarity(embedding_live, embedding_db)
-        print(f"[Xác thực] User: {self.username} | Score: {score:.4f} | Threshold: {self.THRESHOLD}")
+        score = self.recognizer.compute_cosine_similarity(
+            embedding_live,
+            embedding_db
+        )
 
-        # 6. So sánh với ngưỡng (Threshold)
+        # 6. So sánh với threshold
         if score >= self.THRESHOLD:
+            result = "ACCEPT"
+        else:
+            result = "REJECT"
+
+        # Ghi log
+        self.log_verification(score, result)
+
+        print(
+            f"[Xác thực] User: {self.username} | "
+            f"Score: {score:.4f} | "
+            f"Threshold: {self.THRESHOLD:.4f} | "
+            f"Result: {result}"
+        )
+
+        if result == "ACCEPT":
             self.result = True
             self.after(0, self.on_close)
         else:
-            self._show_error(f"Xác thực thất bại!\nKhuôn mặt không khớp (Độ tương đồng: {score*100:.1f}%)")
+            self._show_error(
+                f"Xác thực thất bại!\n"
+                f"Độ tương đồng: {score:.4f}"
+            )
 
     def load_user_embedding_from_db(self, username):
         file_path = os.path.join(
@@ -187,3 +209,39 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         self.is_running = False  # Ngắt vòng lặp update_frame ngay lập tức
         self.camera.stop()
         self.destroy()
+
+    def log_verification(self, score, result):
+        os.makedirs("logs", exist_ok=True)
+
+        log_file = os.path.join(
+            "logs",
+            "face_verification.csv"
+        )
+
+        file_exists = os.path.exists(log_file)
+
+        with open(
+            log_file,
+            "a",
+            newline="",
+            encoding="utf-8"
+        ) as f:
+
+            writer = csv.writer(f)
+
+            if not file_exists:
+                writer.writerow([
+                    "timestamp",
+                    "username",
+                    "score",
+                    "threshold",
+                    "result"
+                ])
+
+            writer.writerow([
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                self.username,
+                f"{score:.6f}",
+                f"{self.THRESHOLD:.6f}",
+                result
+            ])
