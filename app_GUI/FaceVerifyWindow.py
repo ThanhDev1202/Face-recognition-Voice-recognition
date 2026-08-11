@@ -97,6 +97,7 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         frame = self.camera.get_frame(copy=False)
 
         if frame is not None:
+            frame = self.draw_oval(frame)
             # Chuyển BGR -> RGB
             frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             img = Image.fromarray(frame_rgb)
@@ -175,6 +176,12 @@ class FaceVerifyWindow(ctk.CTkToplevel):
 
         self.after(0, _gui_update)
 
+    def draw_oval(self, frame):
+        h, w = frame.shape[:2]
+        # Vẽ oval trắng ở giữa màn hình
+        cv2.ellipse(frame, (w // 2, h // 2), (int(w * 0.22), int(h * 0.38)), 0, 0, 360, (255, 255, 255), 2)
+        return frame
+    
     def on_close(self):
         """Dừng camera và đóng cửa sổ an toàn"""
         self.is_running = False  # Ngắt vòng lặp update_frame ngay lập tức
