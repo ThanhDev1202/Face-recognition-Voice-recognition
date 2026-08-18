@@ -6,6 +6,8 @@ import numpy as np
 import customtkinter as ctk
 import sounddevice as sd
 from tkinter import messagebox
+import csv
+from datetime import datetime
 
 # Thêm thư mục gốc dự án vào sys.path để import các module
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -139,10 +141,17 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
 
             # 5. Tính Cosine Similarity & Đánh giá
             similarity = self.recognizer.compute_cosine_similarity(live_embedding, enrolled_embedding)
-            THRESHOLD = 0.68 
-            print(f"[Xác thực] User: {self.username} | Similarity: {similarity:.4f} | Threshold: {THRESHOLD:.2f}")
+            THRESHOLD = 0.6
+            
+            # Xác định kết quả ACCEPT / REJECT
+            result_str = "ACCEPT" if similarity >= THRESHOLD else "REJECT"
 
-            if similarity >= THRESHOLD:
+            # Ghi log kết quả xác thực
+            self.log_verification(similarity, THRESHOLD, result_str)
+
+            print(f"[Xác thực Giọng nói] User: {self.username} | Similarity: {similarity:.4f} | Threshold: {THRESHOLD:.2f} | Result: {result_str}")
+
+            if result_str == "ACCEPT":
                 self.result = True
                 self._update_ui(
                     self.lbl_status.configure, 
@@ -168,8 +177,51 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
         """Lấy vector embedding đã lưu từ trước của user"""
         file_path = f"database/voice_embeddings/{username}.npy"
         if os.path.exists(file_path):
-            return np.load(file_path)
+            try:
+                return np.load(file_path)
+            except Exception as e:
+                print(f"Lỗi đọc file embedding giọng nói: {e}")
+                return None
         return None
+
+    def log_verification(self, score, threshold, result):
+        """Ghi lịch sử xác thực giọng nói vào file CSV"""
+        os.makedirs("logs", exist_ok=True)
+
+        log_file = os.path.join(
+            "logs",
+            "voice_verification.csv"
+        )
+
+        file_exists = os.path.exists(log_file)
+
+        try:
+            with open(
+                log_file,
+                "a",
+                newline="",
+                encoding="utf-8"
+            ) as f:
+                writer = csv.writer(f)
+
+                if not file_exists:
+                    writer.writerow([
+                        "timestamp",
+                        "username",
+                        "score",
+                        "threshold",
+                        "result"
+                    ])
+
+                writer.writerow([
+                    datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    self.username,
+                    f"{score:.6f}",
+                    f"{threshold:.6f}",
+                    result
+                ])
+        except Exception as e:
+            print(f"Lỗi khi ghi log xác thực giọng nói: {e}")
 
     def _on_close(self):
         """Sự kiện click nút X đóng cửa sổ"""

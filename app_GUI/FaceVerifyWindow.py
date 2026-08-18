@@ -40,7 +40,7 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         self.recognizer = FaceRecognizer(model_path="model/w600k_mbf.onnx")
 
         # Ngưỡng so sánh Cosine Similarity
-        self.THRESHOLD = 0.80
+        self.THRESHOLD = 0.68
 
         # Camera
         self.camera = Camera(camera_index=0, width=640, height=480)
