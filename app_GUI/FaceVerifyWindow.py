@@ -8,14 +8,14 @@ from PIL import Image
 from tkinter import messagebox
 import csv
 from datetime import datetime
-
+import gc
 # Thêm thư mục gốc dự án (thư mục 'python') vào sys.path
 sys.path.append(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 )
 
 # Import các module trong dự án
-from Camera_Recorder.Camera import Camera
+from Camera.Camera import Camera
 from detector.FaceDetector import FaceDetector
 from recognizer.FaceRecognizer import FaceRecognizer
 
@@ -36,8 +36,8 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         # --------------------------------------------------
         # 1. Khởi tạo Models AI & Camera
         # --------------------------------------------------
-        self.detector = FaceDetector(model_path="model/det_500m.onnx", conf_threshold=0.5)
-        self.recognizer = FaceRecognizer(model_path="model/w600k_mbf.onnx")
+        self.detector = FaceDetector(model_path="model/Face/det_500m.onnx", conf_threshold=0.5)
+        self.recognizer = FaceRecognizer(model_path="model/Face/w600k_mbf.onnx")
 
         # Ngưỡng so sánh Cosine Similarity
         self.THRESHOLD = 0.68
@@ -203,11 +203,50 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         # Vẽ oval trắng ở giữa màn hình
         cv2.ellipse(frame, (w // 2, h // 2), (int(w * 0.22), int(h * 0.38)), 0, 0, 360, (255, 255, 255), 2)
         return frame
+    def release_resources(self):
+        """Giải phóng model AI và camera"""
+
+        # Dừng camera
+        if hasattr(self, "camera") and self.camera is not None:
+            try:
+                self.camera.stop()
+            except Exception:
+                pass
+            self.camera = None
+
+        # Giải phóng FaceDetector
+        if hasattr(self, "detector") and self.detector is not None:
+            try:
+                self.detector.session = None
+            except Exception:
+                pass
+
+            self.detector = None
+
+        # Giải phóng FaceRecognizer
+        if hasattr(self, "recognizer") and self.recognizer is not None:
+            try:
+                self.recognizer.session = None
+            except Exception:
+                pass
+
+            self.recognizer = None
+
+        # Garbage Collector
+        gc.collect()
+        print("[FaceVerify] Đã giải phóng Face Models + Camera")
     
     def on_close(self):
-        """Dừng camera và đóng cửa sổ an toàn"""
-        self.is_running = False  # Ngắt vòng lặp update_frame ngay lập tức
-        self.camera.stop()
+        """Dừng camera, giải phóng AI models và đóng cửa sổ"""
+
+        if not self.is_running:
+            return
+
+        self.is_running = False
+
+        # Giải phóng toàn bộ tài nguyên
+        self.release_resources()
+
         self.destroy()
 
     def log_verification(self, score, result):

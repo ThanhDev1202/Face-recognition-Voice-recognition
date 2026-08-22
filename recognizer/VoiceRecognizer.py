@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import torch
 import torchaudio
@@ -12,7 +13,7 @@ class VoiceRecognizer:
         Khởi tạo ECAPA-TDNN từ thư mục model local.
         :param model_dir: Đường dẫn đến thư mục chứa các file .ckpt và hyperparams.yaml
         """
-        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device = "cpu"  # Mô hình chạy trên CPU
 
         # Kiểm tra file cấu hình bắt buộc
         yaml_path = os.path.join(model_dir, "hyperparams.yaml")
@@ -25,6 +26,21 @@ class VoiceRecognizer:
             savedir=model_dir,
             run_opts={"device": self.device}
         )
+
+        # --------------------------------------------------
+        # TỐI ƯU DUNG LƯỢNG: Lượng tử hóa mô hình sang INT8 (Dynamic Quantization)
+        # Giúp giảm ~50% lượng RAM tiêu thụ khi suy luận trên CPU
+        # --------------------------------------------------
+        try:
+            # Truy cập vào module embedding cốt lõi của ECAPA-TDNN và lượng tử hóa các lớp Linear
+            self.classifier.mods.embedding_model = torch.quantization.quantize_dynamic(
+                self.classifier.mods.embedding_model,
+                {torch.nn.Linear},
+                dtype=torch.qint8
+            )
+            print("🚀 [VoiceRecognizer] Đã lượng tử hóa mô hình giọng nói sang INT8 thành công!")
+        except Exception as e:
+            print(f"⚠️ [VoiceRecognizer] Không thể lượng tử hóa mô hình (vẫn dùng chuẩn FP32 gốc): {e}")
 
     def extract_embedding_from_file(self, wav_path):
         """
@@ -73,8 +89,11 @@ class VoiceRecognizer:
         return self._extract_from_tensor(signal)
 
     def _extract_from_tensor(self, signal):
-        """Forward tensor qua model ECAPA-TDNN"""
+        """Forward tensor qua model ECAPA-TDNN kèm đo thời gian hiệu năng"""
         signal = signal.to(self.device)
+
+        # Bắt đầu bấm giờ đo hiệu năng suy luận AI giọng nói
+        start_time = time.time()
 
         with torch.no_grad():
             # EncoderClassifier trả về embeddings dạng [batch_size, 1, 192]
@@ -85,6 +104,11 @@ class VoiceRecognizer:
         norm = np.linalg.norm(embedding)
         if norm > 0:
             embedding = embedding / norm
+
+        # Kết thúc bấm giờ và in thời gian xử lý (miliseconds)
+        end_time = time.time()
+        latency_ms = (end_time - start_time) * 1000
+        print(f"⏱️ [VoiceRecognizer] Thời gian trích xuất giọng nói: {latency_ms:.2f} ms")
 
         return embedding
 

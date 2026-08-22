@@ -5,12 +5,13 @@ import onnxruntime as ort
 
 class FaceDetector:
 
-    def __init__(self, model_path="model/det_500m.onnx", conf_threshold=0.5, nms_threshold=0.4):
+    def __init__(self, model_path="model/Face/det_500m.onnx", conf_threshold=0.5, nms_threshold=0.4):
         self.conf_threshold = conf_threshold
         self.nms_threshold = nms_threshold
 
         # Khởi tạo ONNX Runtime Session
-        self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
+        self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider']) #chạy trên CPU
+        
         
         # Lấy thông tin Input
         input_cfg = self.session.get_inputs()[0]

@@ -1,3 +1,4 @@
+import time
 import cv2
 import numpy as np
 import onnxruntime as ort
@@ -15,7 +16,7 @@ ARCFACE_REF_POINTS = np.array([
 class FaceRecognizer:
 
     def __init__(self, model_path="model/w600k_mbf.onnx"):
-        # Khởi tạo ONNX Session
+        # Khởi tạo ONNX Session chạy trên CPU
         self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
         self.input_name = self.session.get_inputs()[0].name
 
@@ -55,6 +56,9 @@ class FaceRecognizer:
         :param landmarks: 5 điểm mốc của khuôn mặt
         :return: Vector embedding (512,)
         """
+        # Bắt đầu bấm giờ đo hiệu năng trích xuất AI
+        start_time = time.time()
+
         # 1. Căn chỉnh ảnh mặt 112x112
         face_crop = self.align_crop(img, landmarks)
 
@@ -71,6 +75,11 @@ class FaceRecognizer:
         norm = np.linalg.norm(embedding)
         if norm > 0:
             embedding = embedding / norm
+
+        # Kết thúc bấm giờ và in thời gian xử lý (miliseconds)
+        end_time = time.time()
+        latency_ms = (end_time - start_time) * 1000
+        print(f"⏱️ [FaceRecognizer] Thời gian trích xuất embedding: {latency_ms:.2f} ms")
 
         return embedding
 

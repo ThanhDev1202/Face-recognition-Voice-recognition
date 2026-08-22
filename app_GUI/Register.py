@@ -57,7 +57,7 @@ class RegisterWindow(ctk.CTk):
         # Khởi tạo AI Models & Preprocessor
         try:
             self.face_detector = FaceDetector()
-            self.face_recognizer = FaceRecognizer(model_path="model/w600k_mbf.onnx")
+            self.face_recognizer = FaceRecognizer(model_path="model/Face/w600k_mbf.onnx")
             self.voice_recognizer = VoiceRecognizer(model_dir="model/Voice")
             self.voice_preprocessor = VoicePreprocessor(sample_rate=16000)
         except Exception as e:
@@ -115,6 +115,8 @@ class RegisterWindow(ctk.CTk):
         ctk.CTkLabel(right_frame, text="Tên đăng nhập:", font=("Arial", 13)).pack(anchor="w", padx=30, pady=(10, 2))
         self.entry_user = ctk.CTkEntry(right_frame, width=300, placeholder_text="Nhập username...")
         self.entry_user.pack(pady=(0, 10))
+        # Sự kiện kiểm tra khi người dùng rời khỏi ô nhập tên tài khoản
+        self.entry_user.bind("<FocusOut>", self.check_username_exists)
 
         self.lbl_voice_status = ctk.CTkLabel(
             right_frame,
@@ -164,6 +166,32 @@ class RegisterWindow(ctk.CTk):
         self.btn_submit.pack(fill="x", padx=30, pady=5)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
+
+    # #####################################################
+    # KIỂM TRA TÀI KHOẢN TỒN TẠI
+    # #####################################################
+
+    def check_username_exists(self, event=None):
+        """Kiểm tra xem tài khoản đã tồn tại trong cơ sở dữ liệu hay chưa"""
+        username = self.entry_user.get().strip()
+        if not username:
+            return
+
+        face_path = f"database/face_embeddings/{username}.npy"
+        voice_path = f"database/voice_embeddings/{username}.npy"
+
+        if os.path.exists(face_path) or os.path.exists(voice_path):
+            self.lbl_guide.configure(
+                text=f"⚠️ Tài khoản '{username}' đã tồn tại!", 
+                text_color="#e74c3c"
+            )
+            messagebox.showerror("Lỗi", f"Tài khoản '{username}' đã tồn tại trong hệ thống! Vui lòng chọn tên khác.")
+        else:
+            if self.face_embedding is None:
+                self.lbl_guide.configure(
+                    text="Nhấn nút bên dưới để bắt đầu mở Camera", 
+                    text_color="#3498db"
+                )
 
     # #####################################################
     # CÁC HÀM RESET
@@ -223,6 +251,13 @@ class RegisterWindow(ctk.CTk):
         username = self.entry_user.get().strip()
         if not username:
             messagebox.showwarning("Thông báo", "Vui lòng nhập Tên đăng nhập trước!")
+            return
+
+        # Kiểm tra nhanh trước khi cho phép mở camera
+        face_path = f"database/face_embeddings/{username}.npy"
+        voice_path = f"database/voice_embeddings/{username}.npy"
+        if os.path.exists(face_path) or os.path.exists(voice_path):
+            messagebox.showerror("Lỗi", f"Tài khoản '{username}' đã tồn tại! Không thể đăng ký trùng.")
             return
 
         self.entry_user.configure(state="disabled")
@@ -445,12 +480,15 @@ class RegisterWindow(ctk.CTk):
             os.makedirs("database/voice_embeddings", exist_ok=True)
 
             face_path = f"database/face_embeddings/{username}.npy"
-            if os.path.exists(face_path):
-                if not messagebox.askyesno("Xác nhận", f"Tài khoản '{username}' đã tồn tại. Bạn có muốn GHI ĐÈ không?"):
-                    return
+            voice_path = f"database/voice_embeddings/{username}.npy"
+
+            # Chặn hoàn toàn không cho ghi đè nếu đã tồn tại
+            if os.path.exists(face_path) or os.path.exists(voice_path):
+                messagebox.showerror("Lỗi Đăng Ký", f"Tài khoản '{username}' đã tồn tại trong hệ thống. Vui lòng sử dụng tên khác!")
+                return
 
             np.save(face_path, self.face_embedding)
-            np.save(f"database/voice_embeddings/{username}.npy", self.voice_embedding)
+            np.save(voice_path, self.voice_embedding)
 
             messagebox.showinfo("Thành công", f"Đã đăng ký thành công cho tài khoản: {username}")
             self.on_close()
