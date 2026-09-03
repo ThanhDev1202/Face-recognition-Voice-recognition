@@ -123,15 +123,17 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
                 self._update_ui(self.btn_record.configure, state="normal")
                 return
 
-            # 3. Trích xuất Feature Embedding từ âm thanh đã xử lý
+            # 3. Trích xuất Feature Embedding từ âm thanh live
             self._update_ui(self.lbl_status.configure, text="Đang phân tích đặc trưng giọng nói...", text_color="#3498db")
             
             live_embedding = self.recognizer.extract_embedding_from_array(
                 clean_audio, 
                 sample_rate=self.sample_rate
             )
+            # Chuẩn hóa L2 cho vector live
+            live_embedding = live_embedding / np.linalg.norm(live_embedding)
 
-            # 4. Lấy Embedding mẫu đã đăng ký từ DB/File
+            # 4. Lấy Embedding mẫu đã đăng ký từ DB/File (.npy)
             enrolled_embedding = self._get_user_enrolled_embedding(self.username)
 
             if enrolled_embedding is None:
@@ -139,9 +141,9 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
                 self._update_ui(self.btn_record.configure, state="normal")
                 return
 
-            # 5. Tính Cosine Similarity & Đánh giá
-            similarity = self.recognizer.compute_cosine_similarity(live_embedding, enrolled_embedding)
-            THRESHOLD = 0.6
+            # 5. Tính Cosine Similarity với Ma trận dữ liệu (Hỗ trợ cả Matrix 2D và Vector 1D)
+            similarity = self._compute_matrix_similarity(live_embedding, enrolled_embedding)
+            THRESHOLD = 0.60
             
             # Xác định kết quả ACCEPT / REJECT
             result_str = "ACCEPT" if similarity >= THRESHOLD else "REJECT"
@@ -149,7 +151,7 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
             # Ghi log kết quả xác thực
             self.log_verification(similarity, THRESHOLD, result_str)
 
-            print(f"[Xác thực Giọng nói] User: {self.username} | Similarity: {similarity:.4f} | Threshold: {THRESHOLD:.2f} | Result: {result_str}")
+            print(f"[Xác thực Giọng nói] User: {self.username} | Max Similarity: {similarity:.4f} | Threshold: {THRESHOLD:.2f} | Result: {result_str}")
 
             if result_str == "ACCEPT":
                 self.result = True
@@ -173,8 +175,36 @@ class VoiceVerifyWindow(ctk.CTkToplevel):
             self._update_ui(self.lbl_status.configure, text=f"Lỗi hệ thống: {err}", text_color="#e74c3c")
             self._update_ui(self.btn_record.configure, state="normal")
 
+    def _compute_matrix_similarity(self, live_emb, db_emb):
+        """
+        Tính Cosine Similarity giữa vector live_emb và ma trận/vector db_emb.
+        Trả về giá trị tương đồng lớn nhất (Max Score).
+        """
+        # Nếu db_emb là Vector 1D (tương thích dữ liệu đăng ký cũ)
+        if db_emb.ndim == 1:
+            live_emb = live_emb.flatten()
+            db_emb = db_emb / np.linalg.norm(db_emb)
+            return float(np.dot(live_emb, db_emb))
+
+        # Nếu db_emb là Ma trận 2D shape (N, D)
+        elif db_emb.ndim == 2:
+            live_emb = live_emb.flatten()
+            
+            # Chuẩn hóa L2 theo từng hàng (mẫu) trong ma trận DB nếu chưa chuẩn hóa
+            norms = np.linalg.norm(db_emb, axis=1, keepdims=True)
+            norms[norms == 0] = 1.0  # Tránh lỗi chia cho 0
+            db_emb_norm = db_emb / norms
+
+            # Tích vô hướng giữa ma trận (N, D) và vector (D,) -> Mảng các score (N,)
+            scores = np.dot(db_emb_norm, live_emb)
+            
+            # Lấy điểm số cao nhất trong N mẫu thu thập
+            return float(np.max(scores))
+
+        return 0.0
+
     def _get_user_enrolled_embedding(self, username):
-        """Lấy vector embedding đã lưu từ trước của user"""
+        """Lấy vector/ma trận embedding đã lưu từ trước của user"""
         file_path = f"database/voice_embeddings/{username}.npy"
         if os.path.exists(file_path):
             try:
