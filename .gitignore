@@ -21,3 +21,6 @@ model/
 # User data
 database/
 Dataset/
+
+#logs
+logs/

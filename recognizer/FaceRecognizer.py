@@ -15,7 +15,7 @@ ARCFACE_REF_POINTS = np.array([
 
 class FaceRecognizer:
 
-    def __init__(self, model_path="model/w600k_mbf.onnx"):
+    def __init__(self, model_path="model/Face/w600k_mbf.onnx"):
         # Khởi tạo ONNX Session chạy trên CPU
         self.session = ort.InferenceSession(model_path, providers=['CPUExecutionProvider'])
         self.input_name = self.session.get_inputs()[0].name
