@@ -26,7 +26,6 @@ class LivenessDetector:
         LEFT_MOVING -> LEFT_HOLD
                     -> RIGHT_MOVING -> RIGHT_HOLD -> PASS
 
-    Không liên quan đến AntiSpoofing.
     """
 
     def __init__(
