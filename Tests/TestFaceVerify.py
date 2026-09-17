@@ -19,7 +19,7 @@ class FaceVerifyTester:
 
     def __init__(self, det_model_path="model/Face/det_500m.onnx", rec_model_path="model/Face/w600k_mbf.onnx"):
         print("[Init] Đang tải các mô hình AI...")
-        self.detector = FaceDetector(model_path=det_model_path, conf_threshold=0.5)
+        self.detector = FaceDetector(model_path=det_model_path, conf_threshold=0.3)
         self.recognizer = FaceRecognizer(model_path=rec_model_path)
         self.THRESHOLD = 0.68  # Ngưỡng Cosine Similarity
 
@@ -62,12 +62,12 @@ class FaceVerifyTester:
 
         if frame is None:
             print(f"[Error] Không thể đọc file: {image_path}")
-            return "ERROR", 0.0
+            return False, 0.0
 
         bboxes, kpss = self.detector.detect(frame)
         if len(bboxes) == 0:
-            print(f"[{os.path.basename(image_path)}] -> NO FACE ⚠️ (Không thấy mặt)")
-            return "NO_FACE", 0.0
+            print(f"[{os.path.basename(image_path)}] -> REJECT ❌ (Không thấy mặt)")
+            return False, 0.0
 
         # Lấy khuôn mặt có điểm tin cậy cao nhất
         bbox = bboxes[0]
@@ -80,30 +80,31 @@ class FaceVerifyTester:
 
         embedding_db = self.load_user_embedding_from_db(target_username)
         if embedding_db is None:
-            return "ERROR", 0.0
+            return False, 0.0
 
         score = self.compute_matrix_similarity(embedding_live, embedding_db)
         is_match = score >= threshold
-        status_text = "ACCEPT ✅" if is_match else "REJECT ❌"
-        result_code = "ACCEPT" if is_match else "REJECT"
+        status = "ACCEPT ✅" if is_match else "REJECT ❌"
 
-        print(f"[{os.path.basename(image_path)}] -> Score: {score:.4f} | Result: {status_text}")
-        return result_code, score
+        print(f"[{os.path.basename(image_path)}] -> Score: {score:.4f} | Result: {status}")
+        return is_match, score
 
 
 if __name__ == "__main__":
     tester = FaceVerifyTester()
 
-    TARGET_USER = "Thanh"  
-    DATASET_DIR = "C:/Users/admin/OneDrive/Desktop/Dataset/Face"
+    TARGET_USER = "duy123"  
+    DATASET_DIR = "C:/Users/admin/OneDrive/Desktop/Dataset/face spoofing/attack/attack_002"
 
     # Lọc các tập tin ảnh và loại bỏ tuyệt đối các đường dẫn trùng lặp bằng set()
     extensions = ("*.jpg", "*.jpeg", "*.png")
     image_paths_set = set()
 
     for ext in extensions:
+        # Lấy file theo pattern
         found_files = glob.glob(os.path.join(DATASET_DIR, ext))
         for file_path in found_files:
+            # Chuẩn hóa đường dẫn về dạng chuẩn trên Windows
             image_paths_set.add(os.path.normpath(file_path))
 
     image_paths = sorted(list(image_paths_set))
@@ -113,43 +114,19 @@ if __name__ == "__main__":
     print(f"Tổng số ảnh thực tế tìm thấy: {len(image_paths)}")
     print("=" * 60)
 
-    # Khởi tạo các biến đếm thống kê
-    accept_count = 0
-    reject_count = 0
-    no_face_count = 0
-    error_count = 0
+    success_count = 0
+    total_valid = 0
 
     for img_path in image_paths:
-        result_code, score = tester.verify_image(img_path, target_username=TARGET_USER)
-        
-        if result_code == "ACCEPT":
-            accept_count += 1
-        elif result_code == "REJECT":
-            reject_count += 1
-        elif result_code == "NO_FACE":
-            no_face_count += 1
-        else:
-            error_count += 1
+        is_match, score = tester.verify_image(img_path, target_username=TARGET_USER)
+        total_valid += 1
+        if is_match:
+            success_count += 1
 
-    total_images = len(image_paths)
-
-    if total_images > 0:
-        # Tỷ lệ chấp nhận đúng trên tổng số ảnh trong tập dữ liệu
-        overall_accuracy = (accept_count / total_images) * 100
-        
-        # Tỷ lệ chấp nhận chỉ tính trên các ảnh có phát hiện mặt
-        detected_images = accept_count + reject_count
-        detection_accuracy = (accept_count / detected_images * 100) if detected_images > 0 else 0.0
-
+    if total_valid > 0:
+        accuracy = (success_count / total_valid) * 100
         print("\n" + "=" * 60)
-        print(f"KẾT QUẢ ĐÁNH GIÁ THỐNG KÊ CHO USER '{TARGET_USER}':")
-        print(f"- Tổng số ảnh kiểm tra: {total_images}")
-        print(f"- Nhận diện đúng (ACCEPT): {accept_count}")
-        print(f"- Sai khác/Bị từ chối (REJECT): {reject_count}")
-        print(f"- Không phát hiện được mặt (NO FACE): {no_face_count}")
-        if error_count > 0:
-            print(f"- Lỗi đọc file/DB (ERROR): {error_count}")
-        print("-" * 60)
-        print(f"- Độ chính xác toàn bộ tập dữ liệu (Overall Accuracy): {overall_accuracy:.2f}%")
-        print(f"- Độ chính xác trên các ảnh detect được mặt: {detection_accuracy:.2f}%")
+        print(f"KẾT QUẢ ĐÁNH GIÁ ACCURACY CHO '{TARGET_USER}':")
+        print(f"- Số ảnh nhận diện đúng: {success_count}/{total_valid}")
+        print(f"- Tỷ lệ chính xác (Accuracy): {accuracy:.2f}%")
         print("=" * 60)

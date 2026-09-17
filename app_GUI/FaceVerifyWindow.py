@@ -9,6 +9,7 @@ from tkinter import messagebox
 import csv
 from datetime import datetime
 import gc
+import time
 
 # Thêm thư mục gốc dự án (thư mục 'python') vào sys.path
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -20,7 +21,7 @@ from Camera.Camera import Camera
 from detector.FaceDetector import FaceDetector
 from recognizer.FaceRecognizer import FaceRecognizer
 from detector.AntiSpoofing import AntiSpoofing
-
+from detector.LivenessDetector import LivenessDetector
 
 class FaceVerifyWindow(ctk.CTkToplevel):
 
@@ -44,11 +45,9 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         # --------------------------------------------------
         self.detector = FaceDetector(model_path="model/Face/det_500m.onnx", conf_threshold=0.5)
         self.recognizer = FaceRecognizer(model_path="model/Face/w600k_mbf.onnx")
-        
-        # Sử dụng đúng tên file mô hình có sẵn trong thư mục
         self.anti_spoof = AntiSpoofing(model_path="model/Face/mobilenetv3_large.onnx")
         
-        self.SPOOF_THRESHOLD = 0.7  # Ngưỡng xác thực mặt thật
+        self.SPOOF_THRESHOLD = 0.5  # Ngưỡng xác thực mặt thật
         self.THRESHOLD = 0.68       # Ngưỡng Cosine Similarity
 
         # Camera
@@ -101,115 +100,151 @@ class FaceVerifyWindow(ctk.CTkToplevel):
             self.lbl_video.configure(text="Không thể kết nối tới Webcam!", image="")
 
     def update_frame(self):
-        """Render khung hình liên tục từ Webcam lên UI (Thu gom rác RAM)"""
-        if not self.is_running:
-            return
+            """Render khung hình liên tục từ Webcam lên UI, tích hợp vẽ 5 điểm khuôn mặt"""
+            if not self.is_running:
+                return
 
-        frame = self.camera.get_frame(copy=False)
+            frame = self.camera.get_frame(copy=False)
 
-        if frame is not None:
-            frame = self.draw_oval(frame)
-            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-            frame_resized = cv2.resize(frame_rgb, (640, 400), interpolation=cv2.INTER_NEAREST)
-            
-            img = Image.fromarray(frame_resized)
-            self.ctk_img.configure(light_image=img, dark_image=img)
-            img.close()  # Giải phóng bộ nhớ tạm thời của PIL
+            if frame is not None:
+                # Phát hiện mặt ở frame hiện tại của luồng chính để vẽ landmarks tương tác real-time
+                try:
+                    bboxes, kpss = self.detector.detect(frame)
+                    if len(bboxes) == 1:
+                        # Nếu nhận diện đúng 1 mặt, vẽ 5 điểm mốc (màu xanh lá tươi)
+                        frame = self.draw_landmarks(frame, kpss, color=(0, 255, 0), radius=5)
+                    else:
+                        # Nếu chưa có mặt hoặc có nhiều hơn 1 mặt, vẽ khung oval hướng dẫn
+                        frame = self.draw_oval(frame)
+                except Exception:
+                    frame = self.draw_oval(frame)
 
-        self.after(33, self.update_frame)
+                # Nếu đang chạy Liveness, vẽ thêm text hướng dẫn trạng thái
+                if hasattr(self, 'liveness') and self.liveness.started and not self.liveness.finished:
+                    frame = self.liveness.draw_status(frame)
+
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                frame_resized = cv2.resize(frame_rgb, (640, 400), interpolation=cv2.INTER_NEAREST)
+                
+                img = Image.fromarray(frame_resized)
+                self.ctk_img.configure(light_image=img, dark_image=img)
+                img.close()
+
+            self.after(33, self.update_frame)
 
     def success(self):
-        """Khởi chạy nhận diện AI trên luồng riêng (Chống spam click)"""
         if self.is_processing:
             return
-
         self.is_processing = True
-        self.btn_verify.configure(state="disabled", text="Đang xử lý AI...")
-        threading.Thread(target=self._process_verification, daemon=True).start()
+        self.btn_verify.configure(state="disabled", text="Đang chạy Liveness...")
+        
+        # Khởi tạo LivenessDetector
+        self.liveness = LivenessDetector()
+        self.liveness.start()
+        
+        threading.Thread(target=self._process_verification_loop, daemon=True).start()
 
-    def _process_verification(self):
-        """Luồng xử lý chính: Detect -> Anti-Spoofing -> Extract -> Matching"""
-        try:
-            # 1. Lấy khung hình hiện tại
-            frame = self.camera.get_frame(copy=True)
-            if frame is None:
-                self._show_error("Không lấy được dữ liệu từ Camera!")
-                return
+    def _process_verification_loop(self):
+            """Vòng lặp ngầm tối ưu: Chỉ dùng landmarks để check liveness, KHÔNG extract embedding liên tục"""
+            try:
+                embedding_db = self.load_user_embedding_from_db(self.username)
+                if embedding_db is None:
+                    self._show_error(f"Tài khoản '{self.username}' chưa có dữ liệu khuôn mặt!")
+                    return
 
-            # 2. Phát hiện khuôn mặt bằng SCRFD
-            bboxes, kpss = self.detector.detect(frame)
+                captured_samples = [] # Lưu trữ các mốc hoàn thành (STEP/DONE)
 
-            if len(bboxes) == 0:
-                self._show_error("Không tìm thấy khuôn mặt! Vui lòng nhìn thẳng vào camera.")
-                return
+                while self.is_processing and self.is_running:
+                    frame = self.camera.get_frame(copy=True)
+                    if frame is None:
+                        time.sleep(0.01)
+                        continue
 
-            if len(bboxes) > 1:
-                self._show_error("Phát hiện nhiều hơn 1 khuôn mặt! Vui lòng đứng một mình.")
-                return
+                    bboxes, kpss = self.detector.detect(frame)
+                    
+                    if len(bboxes) == 1:
+                        bbox = bboxes[0]
+                        landmarks = kpss[0]
 
-            # Lấy bbox và landmarks của khuôn mặt duy nhất
-            bbox = bboxes[0]
-            landmarks = kpss[0]
+                        # 1. Chỉ gọi Liveness update bằng landmarks (Siêu nhẹ, không tốn CPU)
+                        # Không truyền face_embedding ở đây nữa để giải phóng FaceRecognizer
+                        status_code, msg = self.liveness.update(landmarks)
 
-            # --------------------------------------------------
-            # 2.5 KIỂM TRA MẶT THẬT / GIẢ MẠO (ANTI-SPOOFING)
-            # --------------------------------------------------
-            real_score = self.anti_spoof.predict(frame, bbox)
-            print(f"[Anti-Spoofing] Real Score: {real_score:.4f} | Threshold: {self.SPOOF_THRESHOLD}")
+                        # 2. Khi đạt mốc STEP hoặc DONE, lúc này mới gọi trích xuất embedding và lưu ảnh
+                        if status_code in ("STEP", "DONE"):
+                            print(f"📸 Đang trích xuất embedding tại bước {len(captured_samples)+1}...")
+                            
+                            # Trích xuất embedding duy nhất tại thời điểm chụp mốc
+                            live_emb = self.recognizer.extract_embedding(frame, landmarks)
+                            norm_live = np.linalg.norm(live_emb)
+                            if norm_live > 0:
+                                live_emb = live_emb / norm_live
 
-            if real_score < self.SPOOF_THRESHOLD:
-                self._show_error(
-                    f"Cảnh báo: Phát hiện khuôn mặt không hợp lệ (Giả mạo)!\n"
-                    f"Độ tin cậy mặt thật: {real_score * 100:.1f}%"
-                )
-                self.log_verification(score=0.0, result="SPOOF_REJECT")
-                return
+                            captured_samples.append({
+                                'frame': frame.copy(),
+                                'bbox': bbox,
+                                'embedding': live_emb
+                            })
+                            print(f"✅ Đã lưu mẫu bước {len(captured_samples)}/3")
 
-            # 3. Trích xuất Feature Embedding từ ảnh live
-            embedding_live = self.recognizer.extract_embedding(frame, landmarks)
-            
-            # Chuẩn hóa L2 cho vector live
-            norm_live = np.linalg.norm(embedding_live)
-            if norm_live > 0:
-                embedding_live = embedding_live / norm_live
+                        if status_code == "DONE":
+                            break
+                            
+                        elif status_code is False:
+                            self._show_error(f"Liveness thất bại: {msg}")
+                            return
+                    else:
+                        self.liveness.update(None)
 
-            # 4. Tải dữ liệu khuôn mặt từ database (.npy)
-            embedding_db = self.load_user_embedding_from_db(self.username)
+                    # Nghỉ hợp lý để CPU thảnh thơi (giảm tải 1000% xuống mức bình thường)
+                    time.sleep(0.03)
 
-            if embedding_db is None:
-                self._show_error(f"Tài khoản '{self.username}' chưa đăng ký dữ liệu khuôn mặt!")
-                return
+                # ==========================================================
+                # SAU KHI ĐỦ 3 MẪU: KIỂM TRA SPOOFING & SO SÁNH ĐỊNH DANH
+                # ==========================================================
+                if len(captured_samples) == 3:
+                                self.after(0, lambda: self.btn_verify.configure(text="Đang kiểm tra chống giả mạo..."))
+                                
+                                passed_spoof_count = 0
+                                
+                                for idx, sample in enumerate(captured_samples):
+                                    spoof_score = self.anti_spoof.predict(sample['frame'], sample['bbox'])
+                                    print(f"🛡️ Anti-Spoofing score ảnh {idx+1}: {spoof_score:.4f}")
+                                    
+                                    # Kiểm tra xem ảnh này có vượt qua ngưỡng mặt thật không
+                                    if spoof_score >= self.SPOOF_THRESHOLD:
+                                        passed_spoof_count += 1
 
-            # 5. Tính Cosine Similarity
-            score = self._compute_matrix_similarity(embedding_live, embedding_db)
+                                print(f"🛡️ Số lượng ảnh vượt qua Anti-Spoofing: {passed_spoof_count}/3")
 
-            # 6. So sánh với threshold
-            result = "ACCEPT" if score >= self.THRESHOLD else "REJECT"
+                                # Yêu cầu ít nhất 2/3 ảnh phải đạt chuẩn an toàn
+                                if passed_spoof_count < 2:
+                                    self._show_error("Phát hiện khuôn mặt giả mạo (Không đạt chuẩn an toàn qua các bước)!")
+                                    return
 
-            # Ghi log
-            self.log_verification(score, result)
+                                # Phân tích định danh (So sánh với Database)
+                                self.after(0, lambda: self.btn_verify.configure(text="Đang phân tích định danh..."))
+                                
+                                scores = [self._compute_matrix_similarity(sample['embedding'], embedding_db) for sample in captured_samples]
+                                avg_score = sum(scores) / len(scores)
 
-            print(
-                f"[Xác thực] User: {self.username} | "
-                f"Max Score: {score:.4f} | "
-                f"Threshold: {self.THRESHOLD:.4f} | "
-                f"Result: {result}"
-            )
+                                result = "ACCEPT" if avg_score >= self.THRESHOLD else "REJECT"
+                                self.log_verification(avg_score, result)
 
-            if result == "ACCEPT":
-                self.result = True
-                self.after(0, self.on_close)
-            else:
-                self._show_error(
-                    f"Xác thực thất bại!\n"
-                    f"Độ tương đồng cao nhất: {score:.4f}"
-                )
-        except Exception as e:
-            print(f"[Error] Lỗi xử lý xác thực: {e}")
-            self._show_error("Đã xảy ra lỗi trong quá trình xử lý AI!")
+                                if result == "ACCEPT":
+                                    self.result = True
+                                    self.after(0, lambda: self.btn_verify.configure(
+                                        fg_color="#2ecc71", text="Xác thực thành công! ✓"
+                                    ))
+                                    self.after(1000, self.on_close)
+                                else:
+                                    self._show_error(f"Khuôn mặt không khớp!\nĐộ tương đồng: {avg_score*100:.1f}%")
 
+            except Exception as e:
+                print(f"[Error] Lỗi vòng lặp xác thực: {e}")
+                self._show_error("Đã xảy ra lỗi hệ thống AI!")
+                
     def _compute_matrix_similarity(self, live_emb, db_emb):
-        """Tính Cosine Similarity giữa vector live_emb và ma trận/vector db_emb."""
         live_emb = live_emb.flatten()
 
         if db_emb.ndim == 1:
@@ -229,26 +264,26 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         return 0.0
 
     def load_user_embedding_from_db(self, username):
-        file_path = os.path.join(
-            "database",
-            "face_embeddings",
-            f"{username}.npy"
-        )
-
+        file_path = os.path.join("database", "face_embeddings", f"{username}.npy")
         if not os.path.exists(file_path):
             return None
-
         return np.load(file_path)
 
     def _show_error(self, message):
-        """Hiển thị thông báo lỗi và mở lại nút bấm"""
-        def _gui_update():
-            messagebox.showerror("Thông báo", message, parent=self)
-            self.is_processing = False
-            if self.is_running:
-                self.btn_verify.configure(state="normal", text="Xác nhận khuôn mặt")
+            """Hiển thị thông báo lỗi và mở lại nút bấm nếu cửa sổ vẫn tồn tại"""
+            def _gui_update():
+                # Chỉ hiển thị messagebox nếu cửa sổ vẫn đang chạy và tồn tại
+                if self.is_running and self.winfo_exists():
+                    try:
+                        messagebox.showerror("Thông báo", message, parent=self)
+                    except Exception:
+                        pass
+                
+                self.is_processing = False
+                if self.is_running and self.winfo_exists():
+                    self.btn_verify.configure(state="normal", text="Xác nhận khuôn mặt")
 
-        self.after(0, _gui_update)
+            self.after(0, _gui_update)
 
     def draw_oval(self, frame):
         h, w = frame.shape[:2]
@@ -256,8 +291,6 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         return frame
 
     def release_resources(self):
-        """Giải phóng toàn bộ model AI và camera"""
-
         if hasattr(self, "camera") and self.camera is not None:
             try:
                 self.camera.stop()
@@ -266,25 +299,15 @@ class FaceVerifyWindow(ctk.CTkToplevel):
             self.camera = None
 
         if hasattr(self, "detector") and self.detector is not None:
-            try:
-                self.detector.session = None
-            except Exception:
-                pass
             self.detector = None
 
         if hasattr(self, "recognizer") and self.recognizer is not None:
-            try:
-                self.recognizer.session = None
-            except Exception:
-                pass
             self.recognizer = None
 
         if hasattr(self, "anti_spoof") and self.anti_spoof is not None:
             try:
                 if hasattr(self.anti_spoof, "release"):
                     self.anti_spoof.release()
-                else:
-                    self.anti_spoof.session = None
             except Exception:
                 pass
             self.anti_spoof = None
@@ -293,10 +316,8 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         print("[FaceVerify] Đã giải phóng Face Models + AntiSpoofing + Camera")
 
     def on_close(self):
-        """Dừng camera, giải phóng AI models và đóng cửa sổ"""
         if not self.is_running:
             return
-
         self.is_running = False
         self.release_resources()
         self.destroy()
@@ -309,7 +330,6 @@ class FaceVerifyWindow(ctk.CTkToplevel):
         try:
             with open(log_file, "a", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
-
                 if not file_exists:
                     writer.writerow(["timestamp", "username", "score", "threshold", "result"])
 
@@ -322,3 +342,16 @@ class FaceVerifyWindow(ctk.CTkToplevel):
                 ])
         except Exception as e:
             print(f"[Log Error] Không thể ghi log: {e}")
+
+    def draw_landmarks(self, frame, kpss, color=(0, 255, 0), radius=4):
+            """Vẽ 5 điểm đặc trưng (landmarks) lên khuôn mặt"""
+            if kpss is not None and len(kpss) > 0:
+                # kpss chứa mảng các điểm landmarks của khuôn mặt đầu tiên phát hiện được
+                landmarks = kpss[0]
+                for pt in landmarks:
+                    x, y = int(pt[0]), int(pt[1])
+                    # Vẽ vòng tròn đặc tại vị trí điểm mốc
+                    cv2.circle(frame, (x, y), radius, color, -1)
+                    # Vẽ viền trắng nhỏ quanh chấm để dễ nhìn hơn trên mọi nền
+                    cv2.circle(frame, (x, y), radius + 1, (255, 255, 255), 1)
+            return frame

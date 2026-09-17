@@ -43,9 +43,12 @@ class RegisterWindow(ctk.CTk):
         # --- Cấu hình thu thập đa góc mặt ---
         self.face_embeddings_list = []
         self.face_guides = [
-            "1/3: Nhìn THẲNG vào camera",
-            "2/3: Nghiêng mặt sang TRÁI",
-            "3/3: Nghiêng mặt sang PHẢI"
+            "1/6: Nhìn THẲNG vào camera",
+            "2/6: Nghiêng mặt sang TRÁI",
+            "3/6: Nghiêng mặt sang PHẢI",
+            "4/6: Hơi NGẨNG ĐẦU lên",
+            "5/6: Hơi CÚI ĐẦU xuống",
+            "6/6: Nhìn thẳng và CƯỜI TƯƠI"
         ]
         self.MAX_FACE_SAMPLES = len(self.face_guides)
 

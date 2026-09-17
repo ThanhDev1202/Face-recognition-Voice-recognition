@@ -6,7 +6,7 @@ import onnxruntime as ort
 
 class AntiSpoofing:
 
-    def __init__(self, model_path, input_size=(224, 224), crop_scale=1.35):
+    def __init__(self, model_path, input_size=(224, 224), crop_scale=1.5):
         self.input_size = input_size
         self.crop_scale = crop_scale
 
